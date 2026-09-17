@@ -4,7 +4,7 @@
 \alias{select_door}
 \title{Select an initial door in the Monty Hall game.}
 \usage{
-select_door()
+select_door(game = create_game())
 }
 \arguments{
 \item{...}{no arguments are used by the function.}

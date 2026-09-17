@@ -26,8 +26,7 @@
 #'   create_game()
 #'
 #' @export
-create_game <- function( num.goats = 2 )
-{
+create_game <- function( num.goats = 2 ){
   a.game <- sample( x=c("goat","goat","car"), size=3, replace=F )
   return( a.game )
 }
@@ -56,8 +55,7 @@ create_game <- function( num.goats = 2 )
 #'   select_door()
 #'
 #' @export
-select_door <- function( )
-{
+select_door <- function(game = create_game()) {
   doors <- c(1,2,3)
   a.pick <- sample( doors, size=1 )
   return( a.pick )  # number between 1 and 3
@@ -94,8 +92,7 @@ select_door <- function( )
 #'   open_goat_door( game = this_game, a.pick = my_pick )
 #'
 #' @export
-open_goat_door <- function( game, a.pick )
-{
+open_goat_door <- function(game = create_game(), a.pick = select_door(game)) {
   doors <- c(1,2,3)
   # if contestant selected car,
   # randomly select one of two goats
@@ -312,11 +309,6 @@ play_n_games <- function( n=100 )
   }
 
   results.df <- dplyr::bind_rows( results.list )
-
-  table( results.df ) %>%
-    prop.table( margin=1 ) %>%  # row proportions
-    round( 2 ) %>%
-    print()
 
   return( results.df )
 

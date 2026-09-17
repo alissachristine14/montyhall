@@ -4,7 +4,7 @@
 \alias{open_goat_door}
 \title{Open a goat door in the Monty Hall game.}
 \usage{
-open_goat_door(game, a.pick)
+open_goat_door(game = create_game(), a.pick = select_door(game))
 }
 \arguments{
 \item{game}{A character vector of length 3 representing the game board setup

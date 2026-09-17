@@ -1,0 +1,573 @@
+---
+title: "Montyhall Package Inspection"
+output:
+  html_document:
+    theme: readable
+    df_print: paged
+    highlight: tango
+    toc: true
+params:
+  name: "x"
+  pkg: "montyhall"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = FALSE,
+  eval = TRUE,
+  comment = "",
+  warning = FALSE,
+  message = FALSE
+)
+
+options(width = 100)
+tools::Rd2txt_options(underline_titles = FALSE)
+```
+
+```{r config}
+github_name <- params$name
+pkg_name  <- params$pkg 
+
+root_dir  <- getwd()
+files_dir <- file.path(root_dir, "PKG-FILES")
+repo_path <- sprintf("%s/%s", github_name, pkg_name)
+
+zip_url_main   <- sprintf("https://github.com/%s/%s/archive/refs/heads/main.zip", github_name, pkg_name)
+zip_url_master <- sprintf("https://github.com/%s/%s/archive/refs/heads/master.zip", github_name, pkg_name)
+
+dir.create(files_dir, showWarnings = FALSE, recursive = TRUE)
+
+topics <- c(
+  "create_game",
+  "select_door",
+  "open_goat_door",
+  "change_door",
+  "determine_winner",
+  "play_game",
+  "play_n_games"
+)
+
+rd_files <- paste0(topics, ".Rd")
+```
+
+```{r helpers}
+safe_detach_package <- function(pkg) {
+  pkg_search_name <- paste0("package:", pkg)
+  if (pkg_search_name %in% search()) {
+    try(detach(pkg_search_name, unload = TRUE, character.only = TRUE), silent = TRUE)
+  }
+}
+
+safe_unload_namespace <- function(pkg) {
+  if (pkg %in% loadedNamespaces()) {
+    try(unloadNamespace(pkg), silent = TRUE)
+  }
+}
+
+delete_installed_pkg <- function(pkg) {
+  safe_detach_package(pkg)
+  safe_unload_namespace(pkg)
+
+  if (pkg %in% rownames(installed.packages())) {
+    try(remove.packages(pkg), silent = TRUE)
+  }
+
+  invisible(TRUE)
+}
+
+install_montyhall <- function(username, pkg = "montyhall") {
+  delete_installed_pkg(pkg)
+
+  repo <- sprintf("%s/%s", username, pkg)
+  devtools::install_github(
+    repo = repo,
+    upgrade = "never",
+    dependencies = FALSE,
+    quiet = TRUE
+  )
+
+  invisible(TRUE)
+}
+
+download_package <- function(username, folder, pkg = "montyhall") {
+  dir.create(folder, showWarnings = FALSE, recursive = TRUE)
+
+  urls <- c(
+    main   = sprintf("https://github.com/%s/%s/archive/refs/heads/main.zip", username, pkg),
+    master = sprintf("https://github.com/%s/%s/archive/refs/heads/master.zip", username, pkg)
+  )
+
+  for (branch in names(urls)) {
+    this_url <- urls[[branch]]
+
+    if (!httr::http_error(this_url)) {
+      zip_file <- file.path(folder, sprintf("%s-%s-%s.zip", pkg, username, branch))
+      ex_dir   <- file.path(folder, paste0(pkg, "-", branch))
+
+      if (file.exists(zip_file)) file.remove(zip_file)
+      if (dir.exists(ex_dir)) unlink(ex_dir, recursive = TRUE, force = TRUE)
+
+      utils::download.file(this_url, destfile = zip_file, mode = "wb", quiet = TRUE)
+      utils::unzip(zipfile = zip_file, exdir = folder)
+
+      return(
+        list(
+          branch = branch,
+          zip_file = zip_file,
+          extracted_dir = ex_dir,
+          url = this_url
+        )
+      )
+    }
+  }
+
+  stop("Could not download package zip from either main or master branch.")
+}
+
+print_description <- function(pkg = "montyhall") {
+  fields <- c(
+    "Package", "Title", "Version", "Author",
+    "Imports", "Depends", "Description", "Built"
+  )
+
+  desc_path <- system.file("DESCRIPTION", package = pkg)
+  if (!nzchar(desc_path)) {
+    cat("DESCRIPTION file not found for installed package.\n")
+    return(invisible(NULL))
+  }
+
+  desc <- read.dcf(desc_path, fields = fields)
+  write.dcf(desc)
+  invisible(desc)
+}
+
+print_help <- function(rd_file, extracted_dir, pkg = "montyhall") {
+  man_dir <- file.path(extracted_dir, "man")
+  rd_path <- file.path(man_dir, rd_file)
+
+  title <- gsub("_|\\.Rd", " ", rd_file)
+  title <- toupper(title)
+
+  cat("#####\n")
+  cat(sprintf("#####   %s\n", title))
+  cat("#####\n\n")
+
+  if (!file.exists(rd_path)) {
+    cat(sprintf("Help file not found: %s\n\n", rd_file))
+    cat("#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#\n\n")
+    return(invisible(NULL))
+  }
+
+  tools::Rd2txt(rd_path, out = stdout(), package = pkg)
+  cat("\n\n#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#\n\n")
+
+  invisible(TRUE)
+}
+
+find_rd_for_topic <- function(topic, extracted_dir) {
+  man_dir <- file.path(extracted_dir, "man")
+
+  if (!dir.exists(man_dir)) {
+    stop(sprintf("man directory not found: %s", man_dir))
+  }
+
+  rd_files <- list.files(man_dir, pattern = "\\.Rd$", full.names = TRUE)
+
+  for (rd_path in rd_files) {
+    txt <- tryCatch(readLines(rd_path, warn = FALSE), error = function(e) character())
+
+    if (any(grepl(sprintf("\\\\alias\\{%s\\}", topic), txt)) ||
+        any(grepl(sprintf("\\\\name\\{%s\\}", topic), txt))) {
+      return(rd_path)
+    }
+  }
+
+  NULL
+}
+
+extract_example_code <- function(topic, extracted_dir) {
+  rd_path <- find_rd_for_topic(topic = topic, extracted_dir = extracted_dir)
+
+  ex_file <- tempfile(fileext = ".R")
+  rd_obj  <- tools::parse_Rd(rd_path)
+  tools::Rd2ex(rd_obj, out = ex_file)
+
+  ex_file
+}
+
+run_example_capture <- function(topic, extracted_dir, pkg = "montyhall") {
+  ex_file <- extract_example_code(
+    topic = topic,
+    extracted_dir = extracted_dir
+  )
+
+  suppressPackageStartupMessages(
+    library( package="montyhall", character.only = TRUE)
+  )
+
+  ex_env <- new.env(parent = .GlobalEnv)
+
+  capture.output(
+    source(
+      ex_file,
+      local = ex_env,
+      echo = TRUE,
+      max.deparse.length = Inf,
+      keep.source = TRUE
+    )
+  )
+}
+
+
+run_example <- function(topic, extracted_dir, pkg = "montyhall",
+                        max_lines = 40) {
+  cat("#####\n")
+  cat(sprintf("#####   %s\n", topic))
+  cat("#####\n")
+
+  res <- try({
+    output <- run_example_capture(
+      topic = topic,
+      extracted_dir = extracted_dir,
+      pkg = pkg
+    )
+
+    if (length(output) == 0) {
+      cat("(no printed output)\n")
+    } else {
+      cat(paste(head(output, max_lines), collapse = "\n"))
+      cat("\n")
+
+      if (length(output) > max_lines) {
+        cat(sprintf(
+          "\n... output truncated after %s of %s lines ...\n",
+          max_lines, length(output)
+        ))
+      }
+    }
+
+    invisible(output)
+  }, silent = TRUE)
+
+  if (inherits(res, "try-error")) {
+    cat("\n>>> ERROR\n")
+    cat(gsub("\\s+", " ", as.character(res)), "\n")
+  }
+
+  cat("\n#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#\n\n")
+  invisible(res)
+}
+
+cleanup_downloads <- function(folder, pkg = "montyhall") {
+  candidates <- file.path(folder, c(paste0(pkg, "-main"), paste0(pkg, "-master")))
+  for (x in candidates) {
+    if (dir.exists(x)) unlink(x, recursive = TRUE, force = TRUE)
+  }
+  invisible(TRUE)
+}
+
+has_alias <- function(rd_path, topic) {
+  if (!file.exists(rd_path)) return(FALSE)
+  txt <- tryCatch(readLines(rd_path, warn = FALSE), error = function(e) character())
+  any(grepl(sprintf("\\\\alias\\{%s\\}", topic), txt))
+}
+
+check_description_fields <- function(pkg = "montyhall") {
+  required_fields <- c("Package", "Title", "Version", "Author", "Description")
+  desc_path <- system.file("DESCRIPTION", package = pkg)
+
+  if (!nzchar(desc_path) || !file.exists(desc_path)) {
+    return(data.frame(
+      check = paste("DESCRIPTION field:", required_fields),
+      status = "FAIL",
+      details = "DESCRIPTION file not found",
+      stringsAsFactors = FALSE
+    ))
+  }
+
+  desc_all <- read.dcf(desc_path)
+  has_fields <- required_fields %in% colnames(desc_all)
+
+  data.frame(
+    check = paste("DESCRIPTION field:", required_fields),
+    status = ifelse(has_fields, "PASS", "FAIL"),
+    details = ifelse(has_fields, "Present", "Missing"),
+    stringsAsFactors = FALSE
+  )
+}
+
+check_help_files <- function(extracted_dir, rd_files, topics) {
+  man_dir <- file.path(extracted_dir, "man")
+
+  file_checks <- data.frame(
+    check = paste("Help file exists:", rd_files),
+    status = ifelse(file.exists(file.path(man_dir, rd_files)), "PASS", "FAIL"),
+    details = ifelse(file.exists(file.path(man_dir, rd_files)), "Found in man/", "Missing from man/"),
+    stringsAsFactors = FALSE
+  )
+
+  alias_checks <- data.frame(
+    check = paste("Help alias exists:", topics),
+    status = vapply(
+      topics,
+      function(topic) if (!is.null(find_rd_for_topic(topic, extracted_dir))) "PASS" else "FAIL",
+      character(1)
+    ),
+    details = vapply(
+      topics,
+      function(topic) {
+        hit <- find_rd_for_topic(topic, extracted_dir)
+        if (is.null(hit)) "Matching alias missing" else paste("Found in", basename(hit))
+      },
+      character(1)
+    ),
+    stringsAsFactors = FALSE
+  )
+
+  rbind(file_checks, alias_checks)
+}
+
+check_examples <- function(topics, extracted_dir, pkg = "montyhall",
+                           max_lines = 25) {
+
+  results <- lapply(topics, function(topic) {
+    res <- try({
+      output <- run_example_capture(
+        topic = topic,
+        extracted_dir = extracted_dir,
+        pkg = pkg
+      )
+
+      n_lines <- length(output) - 7
+      if( n_lines < 0 ){ n_lines <- 0 }
+      
+      status <- if (n_lines > max_lines) "WARN" else "PASS"
+      details <- if (n_lines > max_lines) {
+        sprintf("Example produced %s lines of output (limit = %s)", n_lines, max_lines)
+      } else {
+        sprintf("Example completed (%s lines of output)", n_lines)
+      }
+
+      data.frame(
+        check = paste("Example runs:", topic),
+        status = status,
+        details = details,
+        stringsAsFactors = FALSE
+      )
+    }, silent = TRUE)
+
+    if (inherits(res, "try-error")) {
+      data.frame(
+        check = paste("Example runs:", topic),
+        status = "FAIL",
+        details = gsub("\\s+", " ", as.character(res)),
+        stringsAsFactors = FALSE
+      )
+    } else {
+      res
+    }
+  })
+
+  do.call(rbind, results)
+}
+
+check_installed_examples <- function(topics, pkg = "montyhall") {
+  results <- lapply(topics, function(topic) {
+    res <- try(
+      utils::example(
+        topic = topic,
+        package = pkg,
+        character.only = TRUE,
+        prompt.prefix = ""
+      ),
+      silent = TRUE
+    )
+
+    if (inherits(res, "try-error")) {
+      detail <- as.character(res)
+      detail <- gsub("\n", " ", as.character(res))
+      detail <- trimws(detail)
+
+      status <- if (grepl("lazy-load database.*is corrupt", detail)) {
+        "WARN"
+      } else {
+        "FAIL"
+      }
+
+      data.frame(
+        check = paste("Installed help example:", topic),
+        status = status,
+        details = detail,
+        stringsAsFactors = FALSE
+      )
+    } else {
+      data.frame(
+        check = paste("Installed help example:", topic),
+        status = "PASS",
+        details = "utils::example() completed without error",
+        stringsAsFactors = FALSE
+      )
+    }
+  })
+
+  do.call(rbind, results)
+}
+
+build_grading_checks <- function(pkg, extracted_dir, topics, rd_files) {
+  out <- rbind(
+    data.frame(
+      check = "Package installs",
+      status = ifelse(pkg %in% rownames(installed.packages()), "PASS", "FAIL"),
+      details = ifelse(pkg %in% rownames(installed.packages()), "Installed successfully", "Package not installed"),
+      stringsAsFactors = FALSE
+    ),
+    data.frame(
+      check = "Package loads",
+      status = ifelse(paste0("package:", pkg) %in% search(), "PASS", "FAIL"),
+      details = ifelse(paste0("package:", pkg) %in% search(), "Loaded successfully", "Package not attached"),
+      stringsAsFactors = FALSE
+    ),
+    check_description_fields(pkg = pkg),
+    check_help_files(extracted_dir = extracted_dir, rd_files = rd_files, topics = topics),
+    check_examples(topics = topics, extracted_dir = extracted_dir, pkg = pkg)
+  )
+
+  out$status <- factor(out$status, levels = c("FAIL", "WARN", "PASS"))
+  out[order(out$status, out$check), , drop = FALSE]
+}
+```
+
+## Install Package
+
+<hr>
+
+Installing package from: **`r repo_path`**
+
+```{r install-call, echo=FALSE}
+cat(sprintf("devtools::install_github('%s')", repo_path))
+```
+
+```{r download-install}
+download_info <- download_package(
+  username = github_name,
+  folder   = files_dir,
+  pkg      = pkg_name
+)
+
+library(devtools)
+install_montyhall(username = github_name, pkg = pkg_name)
+library(package="montyhall", character.only = TRUE)
+```
+
+Zipped files downloaded from:
+
+> [`r download_info$url`](`r download_info$url`)
+
+<hr>
+<br>
+
+## Grading Checks
+
+```{r grading-checks, results='hide'}
+grading_checks <- build_grading_checks(
+  pkg = pkg_name,
+  extracted_dir = download_info$extracted_dir,
+  topics = topics,
+  rd_files = rd_files
+)
+```
+
+### Summary
+
+```{r grading-summary, results="asis"}
+total_checks <- nrow(grading_checks)
+n_pass <- sum(grading_checks$status == "PASS")
+n_fail <- sum(grading_checks$status == "FAIL")
+
+cat(sprintf("**Passed:** %s / %s  \n", n_pass, total_checks))
+cat(sprintf("**Failed:** %s / %s", n_fail, total_checks))
+```
+
+### Checks Performed
+
+```{r}
+rownames(grading_checks) <- NULL
+
+knitr::kable(
+  grading_checks,
+  align = c("l", "c", "l"),
+  row.names = FALSE
+)
+```
+
+
+## Description File
+
+```{r description}
+print_description(pkg = pkg_name)
+```
+
+## Inspect Documentation
+
+```{r docs}
+purrr::walk(
+  rd_files,
+  print_help,
+  extracted_dir = download_info$extracted_dir,
+  pkg = pkg_name
+)
+```
+
+
+## Run Examples from Source .Rd Files
+
+```{r run-examples}
+purrr::walk(
+  topics,
+  run_example,
+  extracted_dir = download_info$extracted_dir,
+  pkg = pkg_name
+)
+```
+
+
+
+
+
+```{r cleanup}
+safe_detach_package(pkg_name)
+safe_unload_namespace(pkg_name)
+delete_installed_pkg(pkg_name)
+cleanup_downloads(files_dir, pkg = pkg_name)
+```
+
+
+
+<style>
+
+td{ padding: 6px 10px 6px 10px } 
+th{ text-align: left; } 
+
+h1{ font-size:calc(4em + 0.25vw) }
+h2, h3, h4 { color: #995c00; }
+
+h1 { margin-top:40px; }
+h2 { margin-top:100px; }
+h1 { margin-bottom:60px; }
+h2 { margin-bottom:40px; }
+
+body{
+     font-family:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+     font-size:calc(1.5em + 0.25vw);
+     font-weight:300;
+     line-height:1.65;
+ }
+ 
+pre{
+     padding: 10px 10px 10px 60px;
+}
+
+</style>
+
+
+
